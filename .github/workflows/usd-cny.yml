@@ -6,160 +6,39 @@ on:
     - cron: "30 1 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   send-rate:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Send USD/CNY rate
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: |
           python3 - <<'PY'
           import json
-          import math
           import os
           import sys
           import urllib.request
           from datetime import datetime, timezone, timedelta
-          from pathlib import Path
+          from email.utils import parsedate_to_datetime
 
           webhook = os.environ["FEISHU_WEBHOOK"]
-          history_path = Path("data/usd_cny_history.json")
+          rate_url = "https://open.er-api.com/v6/latest/USD"
+
+          with urllib.request.urlopen(rate_url, timeout=20) as response:
+              data = json.loads(response.read().decode("utf-8"))
+
+          cny = data["rates"]["CNY"]
+          update_utc_raw = data.get("time_last_update_utc", "")
 
           cn_tz = timezone(timedelta(hours=8))
-          now_cn_dt = datetime.now(timezone.utc).astimezone(cn_tz)
-          today = now_cn_dt.date().isoformat()
+          now_cn = datetime.now(timezone.utc).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-          def fetch_json(url):
-              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-              with urllib.request.urlopen(req, timeout=20) as response:
-                  return json.loads(response.read().decode("utf-8"))
-
-          def make_seed_history(current_rate):
-              items = []
-              start = now_cn_dt.date() - timedelta(days=6)
-              offsets = [-0.014, -0.010, -0.013, -0.006, -0.002, -0.007, 0]
-              for i in range(7):
-                  day = start + timedelta(days=i)
-                  value = round(current_rate + offsets[i], 4)
-                  items.append({
-                      "date": day.isoformat(),
-                      "rate": value,
-                      "source": "seed"
-                  })
-              return items
-
-          def load_history(current_rate):
-              if history_path.exists():
-                  try:
-                      return json.loads(history_path.read_text())
-                  except Exception:
-                      pass
-              return make_seed_history(current_rate)
-
-          def save_history(items):
-              history_path.parent.mkdir(parents=True, exist_ok=True)
-              history_path.write_text(
-                  json.dumps(items, ensure_ascii=False, indent=2) + "\n"
-              )
-
-          def make_line_chart(items, rows=5, width=18):
-              if not items:
-                  return "暂无走势数据"
-
-              if len(items) > width:
-                  step = len(items) / width
-                  items = [items[int(i * step)] for i in range(width)]
-
-              dates = [d for d, _ in items]
-              values = [v for _, v in items]
-              low = min(values)
-              high = max(values)
-
-              if high == low:
-                  high = low + 0.0001
-
-              grid = [[" " for _ in values] for _ in range(rows)]
-
-              points = []
-              for value in values:
-                  y = round((high - value) / (high - low) * (rows - 1))
-                  points.append(y)
-
-              for x, y in enumerate(points):
-                  grid[y][x] = "─"
-
-              for x in range(len(points) - 1):
-                  y1 = points[x]
-                  y2 = points[x + 1]
-
-                  if y1 == y2:
-                      grid[y1][x] = "─"
-                      grid[y1][x + 1] = "─"
-                  elif y2 < y1:
-                      grid[y1][x] = "╰"
-                      grid[y2][x + 1] = "╭"
-                      for y in range(y2 + 1, y1):
-                          grid[y][x + 1] = "│"
-                  else:
-                      grid[y1][x] = "╭"
-                      grid[y2][x + 1] = "╰"
-                      for y in range(y1 + 1, y2):
-                          grid[y][x + 1] = "│"
-
-              lines = []
-              for r in range(rows):
-                  level = high - (high - low) * r / (rows - 1)
-                  lines.append(f"{level:4.2f} ┤{''.join(grid[r])}")
-
-              start_label = dates[0][5:]
-              end_label = dates[-1][5:]
-              axis_space = " " * max(2, width - len(start_label) - len(end_label))
-              axis = f"     {start_label}{axis_space}{end_label}"
-
-              return "\n".join(lines + [axis])
-
-          current_data = fetch_json("https://open.er-api.com/v6/latest/USD")
-          cny = round(current_data["rates"]["CNY"], 4)
-
-          history = load_history(cny)
-
-          history = [item for item in history if item.get("date") != today]
-          history.append({
-              "date": today,
-              "rate": cny,
-              "source": "real"
-          })
-
-          history = sorted(history, key=lambda x: x["date"])[-7:]
-          save_history(history)
-
-          chart_items = [(item["date"], float(item["rate"])) for item in history]
-          values = [v for _, v in chart_items]
-
-          real_count = sum(1 for item in history if item.get("source") == "real")
-          chart = make_line_chart(chart_items)
-
-          first = values[0]
-          last = values[-1]
-          change = last - first
-          change_pct = change / first * 100 if first else 0
-          direction = "上行" if change > 0 else "下行" if change < 0 else "持平"
-          sign = "+" if change > 0 else ""
-
-          trend_summary = f"近7日参考走势：{direction} {sign}{change:.4f} ({sign}{change_pct:.2f}%)"
-          range_text = f"区间：{min(values):.4f} - {max(values):.4f}"
-
-          if real_count < 7:
-              note_text = f"已记录真实数据 {real_count} 天；前期含初始化参考数据，会随每日真实汇率逐步替换。"
-          else:
-              note_text = "近7日均为真实自动记录数据。"
+          try:
+              update_cn = parsedate_to_datetime(update_utc_raw).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
+          except Exception:
+              update_cn = update_utc_raw or "未知"
 
           card = {
               "config": {
@@ -177,22 +56,42 @@ jobs:
                       "tag": "div",
                       "text": {
                           "tag": "lark_md",
-                          "content": f"**USD/CNY**   **{cny:.4f}**"
+                          "content": f"**今日 USD/CNY 参考汇率**\n\n**USD/CNY：{cny:.4f}**"
                       }
+                  },
+                  {
+                      "tag": "hr"
                   },
                   {
                       "tag": "div",
-                      "text": {
-                          "tag": "plain_text",
-                          "content": f"近7日 USD/CNY\n{chart}\n{trend_summary}\n{range_text}"
-                      }
-                  },
-                  {
-                      "tag": "note",
-                      "elements": [
+                      "fields": [
                           {
-                              "tag": "plain_text",
-                              "content": note_text
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**1 美元约等于**\n{cny:.4f} 人民币"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**100 美元约等于**\n{cny * 100:.2f} 人民币"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**发送时间**\n{now_cn}"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**数据更新时间**\n{update_cn}"
+                              }
                           }
                       ]
                   },
@@ -231,11 +130,3 @@ jobs:
           except json.JSONDecodeError:
               pass
           PY
-
-      - name: Commit updated history
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/usd_cny_history.json
-          git diff --cached --quiet || git commit -m "Update USD CNY history"
-          git push
