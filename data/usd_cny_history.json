@@ -1,0 +1,37 @@
+[
+  {
+    "date": "2026-07-02",
+    "rate": 6.7879,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-03",
+    "rate": 6.7919,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-04",
+    "rate": 6.7889,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-05",
+    "rate": 6.7959,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-06",
+    "rate": 6.7999,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-07",
+    "rate": 6.7949,
+    "source": "seed"
+  },
+  {
+    "date": "2026-07-08",
+    "rate": 6.8019,
+    "source": "real"
+  }
+]
