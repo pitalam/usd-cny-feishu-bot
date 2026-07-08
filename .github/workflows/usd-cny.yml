@@ -17,9 +17,11 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import os
           import urllib.request
           from datetime import datetime, timezone, timedelta
 
+          webhook = os.environ["FEISHU_WEBHOOK"]
           rate_url = "https://open.er-api.com/v6/latest/USD"
 
           with urllib.request.urlopen(rate_url, timeout=20) as response:
@@ -48,12 +50,13 @@ jobs:
           }
 
           req = urllib.request.Request(
-              url="${FEISHU_WEBHOOK}",
+              url=webhook,
               data=json.dumps(payload).encode("utf-8"),
               headers={"Content-Type": "application/json"},
               method="POST",
           )
 
           with urllib.request.urlopen(req, timeout=20) as response:
-              print(response.read().decode("utf-8"))
+              result = response.read().decode("utf-8")
+              print(result)
           PY
