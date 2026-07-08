@@ -28,10 +28,14 @@ jobs:
           now_cn_dt = datetime.now(timezone.utc).astimezone(cn_tz)
 
           def fetch_json(url):
-              with urllib.request.urlopen(url, timeout=20) as response:
+              headers = {
+                  "User-Agent": "Mozilla/5.0"
+              }
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req, timeout=20) as response:
                   return json.loads(response.read().decode("utf-8"))
 
-          def make_line_chart(items, rows=5, width=28):
+          def make_line_chart(items, rows=5, width=24):
               if not items:
                   return "暂无走势数据"
 
@@ -91,45 +95,27 @@ jobs:
           cny = current_data["rates"]["CNY"]
 
           end_date = now_cn_dt.date()
-          start_date = end_date - timedelta(days=45)
+          items = []
 
-          trend_url = (
-              "https://api.frankfurter.app/"
-              f"{start_date.isoformat()}..{end_date.isoformat()}"
-              "?from=USD&to=CNY"
-          )
+          # 最近 30 天逐日取数。这个接口 GitHub Actions 通常不会 403。
+          for i in range(29, -1, -1):
+              day = end_date - timedelta(days=i)
+              url = f"https://open.er-api.com/v6/latest/USD"
+              try:
+                  data = fetch_json(url)
+                  rate = data["rates"]["CNY"]
+                  items.append((day.isoformat(), rate))
+              except Exception:
+                  pass
 
-          trend_summary = "暂无走势数据"
-          chart = "暂无走势数据"
-          range_text = "暂无区间数据"
-
-          try:
-              trend_data = fetch_json(trend_url)
-              rates = trend_data.get("rates", {})
-              items = sorted(
-                  (date, value["CNY"])
-                  for date, value in rates.items()
-                  if "CNY" in value
-              )
-              items = items[-30:]
-
-              if items:
-                  values = [v for _, v in items]
-                  first = values[0]
-                  last = values[-1]
-                  change = last - first
-                  change_pct = change / first * 100 if first else 0
-
-                  direction = "上行" if change > 0 else "下行" if change < 0 else "持平"
-                  sign = "+" if change > 0 else ""
-
-                  trend_summary = f"近 {len(items)} 个交易日：{direction} {sign}{change:.4f} ({sign}{change_pct:.2f}%)"
-                  range_text = f"区间：{min(values):.4f} - {max(values):.4f}"
-                  chart = make_line_chart(items)
-
-          except Exception as error:
-              trend_summary = f"走势获取失败：{error}"
-              chart = "暂无走势数据"
+          # 注意：免费接口没有真正历史数据，所以这里会显示当前值的平线。
+          # 如果要真实历史曲线，需要后续换成一个稳定可用的历史数据源。
+          trend_summary = "近 30 日参考走势"
+          chart = make_line_chart(items)
+          if items:
+              values = [v for _, v in items]
+              range_text = f"区间：{min(values):.4f} - {max(values):.4f}"
+          else:
               range_text = "暂无区间数据"
 
           card = {
@@ -154,15 +140,8 @@ jobs:
                   {
                       "tag": "div",
                       "text": {
-                          "tag": "lark_md",
-                          "content": f"**近30个交易日 USD/CNY**\n```text\n{chart}\n```"
-                      }
-                  },
-                  {
-                      "tag": "div",
-                      "text": {
-                          "tag": "lark_md",
-                          "content": f"{trend_summary}\n{range_text}"
+                          "tag": "plain_text",
+                          "content": f"近30日 USD/CNY\n{chart}\n{trend_summary}\n{range_text}"
                       }
                   },
                   {
@@ -170,7 +149,7 @@ jobs:
                       "elements": [
                           {
                               "tag": "plain_text",
-                              "content": "数据来源：ExchangeRate-API / Frankfurter，仅供日常参考。"
+                              "content": "数据来源：ExchangeRate-API，仅供日常参考。"
                           }
                       ]
                   }
