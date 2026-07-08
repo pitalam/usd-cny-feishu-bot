@@ -18,8 +18,10 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import sys
           import urllib.request
           from datetime import datetime, timezone, timedelta
+          from email.utils import parsedate_to_datetime
 
           webhook = os.environ["FEISHU_WEBHOOK"]
           rate_url = "https://open.er-api.com/v6/latest/USD"
@@ -28,25 +30,86 @@ jobs:
               data = json.loads(response.read().decode("utf-8"))
 
           cny = data["rates"]["CNY"]
-          update_utc = data.get("time_last_update_utc", "")
+          update_utc_raw = data.get("time_last_update_utc", "")
 
-          now_cn = datetime.now(timezone.utc).astimezone(
-              timezone(timedelta(hours=8))
-          ).strftime("%Y-%m-%d %H:%M:%S")
+          cn_tz = timezone(timedelta(hours=8))
+          now_cn = datetime.now(timezone.utc).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-          text = (
-              "美元汇率日报\n"
-              f"USD/CNY：{cny:.4f}\n"
-              f"发送时间：{now_cn}\n"
-              f"数据更新时间：{update_utc}\n"
-              "数据来源：ExchangeRate-API"
-          )
+          try:
+              update_cn = parsedate_to_datetime(update_utc_raw).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
+          except Exception:
+              update_cn = update_utc_raw or "未知"
+
+          card = {
+              "config": {
+                  "wide_screen_mode": True
+              },
+              "header": {
+                  "template": "blue",
+                  "title": {
+                      "tag": "plain_text",
+                      "content": "美元汇率日报"
+                  }
+              },
+              "elements": [
+                  {
+                      "tag": "div",
+                      "text": {
+                          "tag": "lark_md",
+                          "content": f"**今日 USD/CNY 参考汇率**\n\n# {cny:.4f}"
+                      }
+                  },
+                  {
+                      "tag": "hr"
+                  },
+                  {
+                      "tag": "div",
+                      "fields": [
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**1 美元约等于**\n{cny:.4f} 人民币"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**100 美元约等于**\n{cny * 100:.2f} 人民币"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**发送时间**\n{now_cn}"
+                              }
+                          },
+                          {
+                              "is_short": True,
+                              "text": {
+                                  "tag": "lark_md",
+                                  "content": f"**数据更新时间**\n{update_cn}"
+                              }
+                          }
+                      ]
+                  },
+                  {
+                      "tag": "note",
+                      "elements": [
+                          {
+                              "tag": "plain_text",
+                              "content": "数据来源：ExchangeRate-API，仅供日常参考。"
+                          }
+                      ]
+                  }
+              ]
+          }
 
           payload = {
-              "msg_type": "text",
-              "content": {
-                  "text": text
-              }
+              "msg_type": "interactive",
+              "card": card
           }
 
           req = urllib.request.Request(
@@ -57,6 +120,13 @@ jobs:
           )
 
           with urllib.request.urlopen(req, timeout=20) as response:
-              result = response.read().decode("utf-8")
-              print(result)
+              result_text = response.read().decode("utf-8")
+              print(result_text)
+
+          try:
+              result = json.loads(result_text)
+              if result.get("code") not in (0, None):
+                  sys.exit(1)
+          except json.JSONDecodeError:
+              pass
           PY
