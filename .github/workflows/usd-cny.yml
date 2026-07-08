@@ -1,0 +1,59 @@
+name: Send USD CNY Rate To Feishu
+
+on:
+  schedule:
+    # 北京时间 09:30 = UTC 01:30
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  send-rate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send USD/CNY rate
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone, timedelta
+
+          rate_url = "https://open.er-api.com/v6/latest/USD"
+
+          with urllib.request.urlopen(rate_url, timeout=20) as response:
+              data = json.loads(response.read().decode("utf-8"))
+
+          cny = data["rates"]["CNY"]
+          update_utc = data.get("time_last_update_utc", "")
+
+          now_cn = datetime.now(timezone.utc).astimezone(
+              timezone(timedelta(hours=8))
+          ).strftime("%Y-%m-%d %H:%M:%S")
+
+          text = (
+              "美元汇率日报\n"
+              f"USD/CNY：{cny:.4f}\n"
+              f"发送时间：{now_cn}\n"
+              f"数据更新时间：{update_utc}\n"
+              "数据来源：ExchangeRate-API"
+          )
+
+          payload = {
+              "msg_type": "text",
+              "content": {
+                  "text": text
+              }
+          }
+
+          req = urllib.request.Request(
+              url="${FEISHU_WEBHOOK}",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(req, timeout=20) as response:
+              print(response.read().decode("utf-8"))
+          PY
