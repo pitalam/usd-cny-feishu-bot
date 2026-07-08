@@ -21,24 +21,116 @@ jobs:
           import sys
           import urllib.request
           from datetime import datetime, timezone, timedelta
-          from email.utils import parsedate_to_datetime
 
           webhook = os.environ["FEISHU_WEBHOOK"]
-          rate_url = "https://open.er-api.com/v6/latest/USD"
-
-          with urllib.request.urlopen(rate_url, timeout=20) as response:
-              data = json.loads(response.read().decode("utf-8"))
-
-          cny = data["rates"]["CNY"]
-          update_utc_raw = data.get("time_last_update_utc", "")
 
           cn_tz = timezone(timedelta(hours=8))
-          now_cn = datetime.now(timezone.utc).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
+          now_cn_dt = datetime.now(timezone.utc).astimezone(cn_tz)
+
+          def fetch_json(url):
+              with urllib.request.urlopen(url, timeout=20) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          def make_line_chart(items, rows=5, width=28):
+              if not items:
+                  return "暂无走势数据"
+
+              if len(items) > width:
+                  step = len(items) / width
+                  items = [items[int(i * step)] for i in range(width)]
+
+              dates = [d for d, _ in items]
+              values = [v for _, v in items]
+              low = min(values)
+              high = max(values)
+
+              if high == low:
+                  high = low + 0.0001
+
+              grid = [[" " for _ in values] for _ in range(rows)]
+
+              points = []
+              for value in values:
+                  y = round((high - value) / (high - low) * (rows - 1))
+                  points.append(y)
+
+              for x, y in enumerate(points):
+                  grid[y][x] = "─"
+
+              for x in range(len(points) - 1):
+                  y1 = points[x]
+                  y2 = points[x + 1]
+
+                  if y1 == y2:
+                      grid[y1][x] = "─"
+                      grid[y1][x + 1] = "─"
+                  elif y2 < y1:
+                      grid[y1][x] = "╰"
+                      grid[y2][x + 1] = "╭"
+                      for y in range(y2 + 1, y1):
+                          grid[y][x + 1] = "│"
+                  else:
+                      grid[y1][x] = "╭"
+                      grid[y2][x + 1] = "╰"
+                      for y in range(y1 + 1, y2):
+                          grid[y][x + 1] = "│"
+
+              lines = []
+              for r in range(rows):
+                  level = high - (high - low) * r / (rows - 1)
+                  lines.append(f"{level:4.2f} ┤{''.join(grid[r])}")
+
+              start_label = dates[0][5:]
+              end_label = dates[-1][5:]
+              axis_space = " " * max(2, width - len(start_label) - len(end_label))
+              axis = f"     {start_label}{axis_space}{end_label}"
+
+              return "\n".join(lines + [axis])
+
+          current_data = fetch_json("https://open.er-api.com/v6/latest/USD")
+          cny = current_data["rates"]["CNY"]
+
+          end_date = now_cn_dt.date()
+          start_date = end_date - timedelta(days=45)
+
+          trend_url = (
+              "https://api.frankfurter.app/"
+              f"{start_date.isoformat()}..{end_date.isoformat()}"
+              "?from=USD&to=CNY"
+          )
+
+          trend_summary = "暂无走势数据"
+          chart = "暂无走势数据"
+          range_text = "暂无区间数据"
 
           try:
-              update_cn = parsedate_to_datetime(update_utc_raw).astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")
-          except Exception:
-              update_cn = update_utc_raw or "未知"
+              trend_data = fetch_json(trend_url)
+              rates = trend_data.get("rates", {})
+              items = sorted(
+                  (date, value["CNY"])
+                  for date, value in rates.items()
+                  if "CNY" in value
+              )
+              items = items[-30:]
+
+              if items:
+                  values = [v for _, v in items]
+                  first = values[0]
+                  last = values[-1]
+                  change = last - first
+                  change_pct = change / first * 100 if first else 0
+
+                  direction = "上行" if change > 0 else "下行" if change < 0 else "持平"
+                  sign = "+" if change > 0 else ""
+
+                  trend_summary = f"近 {len(items)} 个交易日：{direction} {sign}{change:.4f} ({sign}{change_pct:.2f}%)"
+                  range_text = f"区间：{min(values):.4f} - {max(values):.4f}"
+                  chart = make_line_chart(items)
+
+          except Exception as error:
+              trend_summary = f"走势获取失败：{error}"
+              chart = "暂无走势数据"
+              range_text = "暂无区间数据"
 
           card = {
               "config": {
@@ -56,51 +148,29 @@ jobs:
                       "tag": "div",
                       "text": {
                           "tag": "lark_md",
-                          "content": f"**今日 USD/CNY 参考汇率**\n\n# {cny:.4f}"
+                          "content": f"**USD/CNY**   **{cny:.4f}**"
                       }
                   },
                   {
-                      "tag": "hr"
+                      "tag": "div",
+                      "text": {
+                          "tag": "lark_md",
+                          "content": f"**近30个交易日 USD/CNY**\n```text\n{chart}\n```"
+                      }
                   },
                   {
                       "tag": "div",
-                      "fields": [
-                          {
-                              "is_short": True,
-                              "text": {
-                                  "tag": "lark_md",
-                                  "content": f"**1 美元约等于**\n{cny:.4f} 人民币"
-                              }
-                          },
-                          {
-                              "is_short": True,
-                              "text": {
-                                  "tag": "lark_md",
-                                  "content": f"**100 美元约等于**\n{cny * 100:.2f} 人民币"
-                              }
-                          },
-                          {
-                              "is_short": True,
-                              "text": {
-                                  "tag": "lark_md",
-                                  "content": f"**发送时间**\n{now_cn}"
-                              }
-                          },
-                          {
-                              "is_short": True,
-                              "text": {
-                                  "tag": "lark_md",
-                                  "content": f"**数据更新时间**\n{update_cn}"
-                              }
-                          }
-                      ]
+                      "text": {
+                          "tag": "lark_md",
+                          "content": f"{trend_summary}\n{range_text}"
+                      }
                   },
                   {
                       "tag": "note",
                       "elements": [
                           {
                               "tag": "plain_text",
-                              "content": "数据来源：ExchangeRate-API，仅供日常参考。"
+                              "content": "数据来源：ExchangeRate-API / Frankfurter，仅供日常参考。"
                           }
                       ]
                   }
